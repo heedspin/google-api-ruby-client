@@ -109,6 +109,8 @@ module Google
       self.key = options[:key]
       self.user_ip = options[:user_ip]
       self.retries = options.fetch(:retries) { 0 }
+      self.client_id = options[:client_id] # for refresh
+      self.client_secret = options[:client_secret] # for refresh
       @discovery_uris = {}
       @discovery_documents = {}
       @discovered_apis = {}
@@ -238,6 +240,16 @@ module Google
     # @return [FixNum]
     #  Number of retries
     attr_accessor :retries
+
+    # OAuth Client ID. Used when using the refresh token to update the offline access token.
+    #
+    # @return [String]
+    attr_accessor :client_id 
+
+    # OAuth Client Secret. Used when using the refresh token to update the offline access token.
+    #
+    # @return [String]
+    attr_accessor :client_secret
 
     ##
     # Returns the URI for the directory document.
@@ -632,6 +644,27 @@ module Google
       end
     end
 
+    ##
+    # Using a refresh token per https://developers.google.com/accounts/docs/OAuth2WebServer#refresh
+    # This will update the authorization object with the new access_token and anything else returned. 
+    # You need to detect the change persist the new access_token.
+    def refresh_authorization!
+      refresh_request = Google::APIClient::Request.new(
+        uri: self.authorization.token_credential_uri,
+        http_method: 'post',
+        # I don't know why, but json does not seem to work.  Only url encoded.  Lameness.
+        headers: { 'Content-Type' => 'application/x-www-form-urlencoded' },
+        body: {
+          grant_type: 'refresh_token',
+          refresh_token: self.authorization.refresh_token,
+          client_id: self.client_id,
+          client_secret: self.client_secret
+        }.map { |k,v| k.to_s + '=' + CGI.escape(v) }.join('&')
+      )
+      response = self.execute!(refresh_request)
+      authorization.update_token!(JSON.parse(response.body))
+    end
+
     protected
 
     ##
@@ -670,13 +703,13 @@ module Google
     #   OAuth 2 credentials
     # @return [Proc] 
     def client_error_handler(authorization)  
-      can_refresh = authorization.respond_to?(:refresh_token) && auto_refresh_token 
+      can_refresh = authorization.respond_to?(:refresh_token) && auto_refresh_token && self.client_id && self.client_secret
       Proc.new do |exception, tries|
         next unless exception.kind_of?(ClientError)
         if exception.result.status == 401 && can_refresh && tries == 1
           begin
             logger.debug("Attempting refresh of access token & retry of request")
-            authorization.fetch_access_token!
+            self.refresh_authorization!(authorization)
             next
           rescue Signet::AuthorizationError
           end
@@ -684,7 +717,6 @@ module Google
         raise exception
       end
     end
-
   end
 
 end
