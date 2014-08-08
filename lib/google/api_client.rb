@@ -709,7 +709,7 @@ module Google
         if exception.result.status == 401 && can_refresh && tries == 1
           begin
             logger.debug("Attempting refresh of access token & retry of request")
-            self.refresh_authorization!(authorization)
+            self.refresh_authorization!
             next
           rescue Signet::AuthorizationError
           end
